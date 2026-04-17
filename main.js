@@ -37,10 +37,15 @@ let winner = null;
 function placePlayers(){
   const w = window.innerWidth|0;
   players.length = 0;
-  players.push({x: Math.floor(w*0.12), color:'#ff5e57', alive:true});
-  players.push({x: Math.floor(w*0.88), color:'#6be585', alive:true});
+  // left player faces right (1), right player faces left (-1)
+  players.push({x: Math.floor(w*0.12), color:'#ff5e57', alive:true, facing:1});
+  players.push({x: Math.floor(w*0.88), color:'#6be585', alive:true, facing:-1});
   players.forEach(p=>{ p.y = terrain[p.x]; p.radius = 12; p.health = 100; });
   gameOver = false; winner = null;
+  // reset UI defaults
+  currentTurn = 0; updateTurnUI();
+  angleInput.value = 45 * players[currentTurn].facing; angleVal.textContent = angleInput.value;
+  powerInput.value = 0; powerVal.textContent = powerInput.value;
 }
 
 // Controls
@@ -63,6 +68,11 @@ function nextTurn(){
   updateTurnUI();
   const p = players[currentTurn];
   p.y = terrain[Math.max(0,Math.min(window.innerWidth-1,p.x|0))];
+  // reset angle facing the direction the player is looking
+  angleInput.value = 45 * (p.facing||1);
+  angleVal.textContent = angleInput.value;
+  // reset power
+  powerInput.value = 0; powerVal.textContent = powerInput.value;
 }
 
 // Projectile
@@ -99,7 +109,9 @@ function launch(){
   const angleDeg = parseFloat(angleInput.value);
   const power = parseFloat(powerInput.value);
   const ang = angleDeg * Math.PI / 180.0;
-  const vx = Math.cos(ang) * power * speedMul;
+  const facing = p.facing || 1;
+  // vx direction depends on facing; angleDeg is signed relative to forward (-90..90)
+  const vx = Math.cos(ang) * power * speedMul * facing;
   const vy = -Math.sin(ang) * power * speedMul;
   projectile = {x: p.x, y: p.y - p.radius - 2, vx, vy, owner: currentTurn, traveled:0};
   playSound('fire');
@@ -113,8 +125,16 @@ function movePlayer(dx){
   if(gameOver) return;
   const p = players[currentTurn];
   if(!p || !p.alive) return;
+  const oldFacing = p.facing || 1;
   p.x = Math.max(0, Math.min(window.innerWidth-1, (p.x + dx)|0));
   p.y = terrain[Math.max(0, Math.min(window.innerWidth-1, p.x|0))];
+  // update facing based on movement direction
+  if(dx>0) p.facing = 1; else if(dx<0) p.facing = -1;
+  if(p.facing !== oldFacing){
+    // mirror angle sign when flipping facing
+    angleInput.value = String(-parseFloat(angleInput.value)||0);
+    angleVal.textContent = angleInput.value;
+  }
 }
 
 function checkGameOver(){
@@ -197,11 +217,38 @@ function draw(){
     ctx.beginPath();
     ctx.arc(x, y-8, p.radius, 0, Math.PI*2);
     ctx.fill();
+    // draw eye to show facing and looking direction
+    const eyeX = x + (p.facing||1) * (p.radius*0.5);
+    const eyeY = (y-10);
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(eyeX, eyeY, 5, 0, Math.PI*2); ctx.fill();
+    // pupil moved a bit toward aim direction
+    let angP = (parseFloat(angleInput.value) || 0) * Math.PI/180;
+    const pupilOffsetX = Math.cos(angP) * 2 * (p.facing||1);
+    const pupilOffsetY = -Math.sin(angP) * 2;
+    ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(eyeX + pupilOffsetX, eyeY + pupilOffsetY, 2.2, 0, Math.PI*2); ctx.fill();
     if(idx===currentTurn && !projectile && !gameOver){
       const ang = (parseFloat(angleInput.value) * Math.PI/180);
-      const gx = x + Math.cos(ang)*p.radius*1.6;
+      const facing = p.facing || 1;
+      const gx = x + Math.cos(ang)*p.radius*1.6 * facing;
       const gy = (y-8) - Math.sin(ang)*p.radius*1.6;
       ctx.strokeStyle = '#222'; ctx.lineWidth=3; ctx.beginPath(); ctx.moveTo(x,y-8); ctx.lineTo(gx,gy); ctx.stroke();
+
+      // draw power arrow (grows with power)
+      const powerRatio = (parseFloat(powerInput.value) || 0) / (parseFloat(powerInput.max) || 120);
+      const arrowLen = p.radius*2 + powerRatio * 90;
+      const ax = x + Math.cos(ang) * arrowLen * facing;
+      const ay = (y-8) - Math.sin(ang) * arrowLen;
+      ctx.strokeStyle = 'rgba(0,0,0,0.9)'; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(x,y-8); ctx.lineTo(ax,ay); ctx.stroke();
+      // small triangle head
+      ctx.fillStyle = 'rgba(0,0,0,0.9)'; ctx.beginPath();
+      const hx = ax, hy = ay;
+      const side = 6;
+      const nx = -Math.sin(ang) * side * facing;
+      const ny = -Math.cos(ang) * side;
+      ctx.moveTo(hx,hy);
+      ctx.lineTo(hx+nx, hy+ny);
+      ctx.lineTo(hx-nx, hy-ny);
+      ctx.closePath(); ctx.fill();
     }
     ctx.fillStyle = '#000'; ctx.font='10px sans-serif'; ctx.textAlign='center'; ctx.fillText(p.health|0, x, y-22);
   });
@@ -257,15 +304,16 @@ window.addEventListener('keydown', e=>{
   } else if(e.key==='ArrowRight'){
     movePlayer(6);
   } else if(e.key==='ArrowUp'){
-    angleInput.value = Math.max(0, Math.min(360, parseInt(angleInput.value) - 3));
+    angleInput.value = Math.max(-90, Math.min(90, parseInt(angleInput.value) - 3));
     angleVal.textContent = angleInput.value;
   } else if(e.key==='ArrowDown'){
-    angleInput.value = Math.max(0, Math.min(360, parseInt(angleInput.value) + 3));
+    angleInput.value = Math.max(-90, Math.min(90, parseInt(angleInput.value) + 3));
     angleVal.textContent = angleInput.value;
   } else if(e.code==='Space'){
     if(!charging && !projectile && !gameOver){
       charging = true;
       // charge power faster while holding
+      powerInput.value = 0; powerVal.textContent = powerInput.value; // start from zero
       chargeInterval = setInterval(()=>{
         powerInput.value = Math.min(parseInt(powerInput.max), parseInt(powerInput.value) + 2);
         powerVal.textContent = powerInput.value;
@@ -281,8 +329,8 @@ window.addEventListener('keyup', e=>{
       charging = false;
       clearInterval(chargeInterval); chargeInterval = null;
       launch();
-      // small cooldown: reset power gradually
-      setTimeout(()=>{ powerInput.value = 40; powerVal.textContent = powerInput.value; }, 600);
+      // small cooldown: after firing reset power to 0
+      setTimeout(()=>{ powerInput.value = 0; powerVal.textContent = powerInput.value; }, 300);
     }
   }
 });
