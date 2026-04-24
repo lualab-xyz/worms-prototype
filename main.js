@@ -40,7 +40,7 @@ function placePlayers(){
   // left player faces right (1), right player faces left (-1)
   players.push({x: Math.floor(w*0.12), color:'#ff5e57', alive:true, facing:1});
   players.push({x: Math.floor(w*0.88), color:'#6be585', alive:true, facing:-1});
-  players.forEach(p=>{ p.y = terrain[p.x]; p.radius = 12; p.health = 100; });
+  players.forEach(p=>{ p.y = terrain[p.x]; p.radius = 12; p.health = 100; p.vy = 0; p.inAir = false; });
   gameOver = false; winner = null;
   // reset UI defaults
   currentTurn = 0; updateTurnUI();
@@ -89,15 +89,23 @@ function playSound(type){
     const g = ac.createGain();
     o.connect(g); g.connect(ac.destination);
     if(type==='fire'){
+      o.type = 'sine';
       o.frequency.value = 700;
       g.gain.value = 0.08;
       o.start();
       setTimeout(()=>{ o.stop(); ac.close(); }, 120);
     } else if(type==='explosion'){
+      o.type = 'sawtooth';
       o.frequency.value = 120;
       g.gain.value = 0.14;
       o.start();
       setTimeout(()=>{ o.stop(); ac.close(); }, 220);
+    } else if(type==='jump'){
+      o.type = 'triangle';
+      o.frequency.value = 330;
+      g.gain.value = 0.06;
+      o.start();
+      setTimeout(()=>{ o.stop(); ac.close(); }, 120);
     }
   }catch(e){/* ignore audio errors */}
 }
@@ -265,6 +273,20 @@ function loop(ts){
   const dt = Math.min(40, ts-last);
   last = ts;
 
+  // update players physics (jump/gravity)
+  players.forEach(p=>{
+    if(p.inAir || p.vy){
+      p.vy += (gravity * 0.6) * (dt/16);
+      p.y += p.vy * (dt/16) * 12;
+      const tx = Math.max(0, Math.min(window.innerWidth-1, p.x|0));
+      if(p.y >= terrain[tx]){
+        p.y = terrain[tx];
+        p.vy = 0;
+        p.inAir = false;
+      }
+    }
+  });
+
   if(projectile){
     projectile.vy += gravity * (dt/16);
     projectile.x += projectile.vx * (dt/16) * 16;
@@ -297,7 +319,35 @@ function loop(ts){
 resize();
 requestAnimationFrame(loop);
 
-// Keyboard handling: move, angle, charge with space
+// Keyboard handling: move, angle, charge with space (short press = jump, hold = charge)
+let spaceDown = false;
+let spaceDownTime = 0;
+let holdTimer = null;
+function startCharging(){
+  if(charging || projectile || gameOver) return;
+  charging = true;
+  powerInput.value = 0; powerVal.textContent = powerInput.value;
+  chargeInterval = setInterval(()=>{
+    powerInput.value = Math.min(parseInt(powerInput.max), parseInt(powerInput.value) + 2);
+    powerVal.textContent = powerInput.value;
+  }, 120);
+}
+function stopChargingAndLaunch(){
+  if(!charging) return;
+  charging = false;
+  clearInterval(chargeInterval); chargeInterval = null;
+  launch();
+  setTimeout(()=>{ powerInput.value = 0; powerVal.textContent = powerInput.value; }, 300);
+}
+function doJump(){
+  const p = players[currentTurn];
+  if(!p || !p.alive) return;
+  if(p.inAir) return;
+  p.vy = -9;
+  p.inAir = true;
+  playSound('jump');
+}
+
 window.addEventListener('keydown', e=>{
   if(e.key==='ArrowLeft'){
     movePlayer(-6);
@@ -310,14 +360,10 @@ window.addEventListener('keydown', e=>{
     angleInput.value = Math.max(-90, Math.min(90, parseInt(angleInput.value) + 3));
     angleVal.textContent = angleInput.value;
   } else if(e.code==='Space'){
-    if(!charging && !projectile && !gameOver){
-      charging = true;
-      // charge power faster while holding
-      powerInput.value = 0; powerVal.textContent = powerInput.value; // start from zero
-      chargeInterval = setInterval(()=>{
-        powerInput.value = Math.min(parseInt(powerInput.max), parseInt(powerInput.value) + 2);
-        powerVal.textContent = powerInput.value;
-      }, 120);
+    if(!spaceDown && !projectile && !gameOver){
+      spaceDown = true;
+      spaceDownTime = Date.now();
+      holdTimer = setTimeout(()=>{ startCharging(); }, 300);
     }
   } else if(e.key==='r'){
     rebuildTerrain(); projectile=null; players.forEach(p=>{p.alive=true;p.health=100}); currentTurn=0; updateTurnUI(); hintEl.textContent='Pulsa FIRE para lanzar. Destrucción simple de terreno.'; gameOver=false; winner=null;
@@ -326,11 +372,16 @@ window.addEventListener('keydown', e=>{
 window.addEventListener('keyup', e=>{
   if(e.code==='Space'){
     if(charging){
-      charging = false;
-      clearInterval(chargeInterval); chargeInterval = null;
-      launch();
-      // small cooldown: after firing reset power to 0
-      setTimeout(()=>{ powerInput.value = 0; powerVal.textContent = powerInput.value; }, 300);
+      stopChargingAndLaunch();
+    } else {
+      // short press -> jump
+      clearTimeout(holdTimer); holdTimer = null;
+      if(!spaceDown) return;
+      const held = Date.now() - spaceDownTime;
+      if(held < 300){
+        doJump();
+      }
+      spaceDown = false;
     }
   }
 });
